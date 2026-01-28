@@ -1,0 +1,9 @@
+## Interface: 11200
+## Title: Position Indicator
+## Notes: Visual indicator for melee range and behind position
+## Author: Abstractz
+## Version: 1.0
+## SavedVariables: PositionIndicatorDB
+
+PositionIndicator.lua
+PositionIndicator.xml

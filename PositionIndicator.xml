@@ -1,0 +1,34 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/">
+    <Frame name="PositionIndicatorFrame" parent="UIParent" frameStrata="HIGH" movable="true" enableMouse="true" hidden="true">
+        <Size><AbsDimension x="64" y="64"/></Size>
+        <Anchors>
+            <Anchor point="CENTER"><Offset><AbsDimension x="0" y="-150"/></Offset></Anchor>
+        </Anchors>
+        <Layers>
+            <Layer level="BACKGROUND">
+                <Texture name="PositionIndicatorFadeTexture" hidden="true">
+                    <Size><AbsDimension x="64" y="64"/></Size>
+                    <Anchors><Anchor point="CENTER"/></Anchors>
+                </Texture>
+            </Layer>
+            <Layer level="ARTWORK">
+                <Texture name="PositionIndicatorTexture">
+                    <Size><AbsDimension x="64" y="64"/></Size>
+                    <Anchors><Anchor point="CENTER"/></Anchors>
+                </Texture>
+            </Layer>
+        </Layers>
+        <Scripts>
+            <OnLoad>PositionIndicator_OnLoad()</OnLoad>
+            <OnEvent>PositionIndicator_OnEvent()</OnEvent>
+            <OnUpdate>PositionIndicator_OnUpdate()</OnUpdate>
+            <OnDragStart>
+                if PositionIndicator_CanDrag() then this:StartMoving() end
+            </OnDragStart>
+            <OnDragStop>
+                this:StopMovingOrSizing()
+                PositionIndicator_SavePosition()
+            </OnDragStop>
+        </Scripts>
+    </Frame>
+</Ui>
