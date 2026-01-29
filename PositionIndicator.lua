@@ -1,13 +1,24 @@
 -- PositionIndicator for UnitXP SP3
 -- Uses Lua OnUpdate polling with public UnitXP API
 
+local UnitExists = UnitExists
+local UnitCanAttack = UnitCanAttack
+local UnitIsDead = UnitIsDead
+local UnitXP = UnitXP
+local pairs = pairs
+local tostring = tostring
+local strfind = string.find
+local strlower = string.lower
+local strsub = string.sub
+local tonumber = tonumber
+
 local TEXTURE_OUT = "Interface\\AddOns\\PositionIndicator\\textures\\out_of_range"
 local TEXTURE_IN = "Interface\\AddOns\\PositionIndicator\\textures\\in_range"
 local TEXTURE_BEHIND = "Interface\\AddOns\\PositionIndicator\\textures\\in_range_behind"
 
 local FADE_TIME = 0.15
 local DEFAULT_SIZE = 64
-local DEFAULT_POLL_INTERVAL = 0.1  -- 100ms
+local DEFAULT_POLL_INTERVAL = 0.2  -- 200ms
 
 local DEBUG = false
 
@@ -25,8 +36,9 @@ local fadeFrom, fadeTo
 local isTracking = false
 local pollElapsed = 0
 local pollInterval = DEFAULT_POLL_INTERVAL
+local hasValidTarget = false
 
-local defaults = { enabled=true, locked=false, size=64, posX=0, posY=-150, pollInterval=0.1 }
+local defaults = { enabled=true, locked=false, size=64, posX=0, posY=-150, pollInterval=0.2 }
 
 -- Debug print
 local function D(msg)
@@ -55,7 +67,7 @@ end
 -- Transition to new state with crossfade
 local function Transition(newState)
     if currentState == newState then return end
-    D("Transition: "..tostring(currentState).." -> "..tostring(newState))
+    if DEBUG then D("Transition: "..tostring(currentState).." -> "..tostring(newState)) end
 
     local newTexPath = GetTexturePath(newState)
     local oldTexPath = GetTexturePath(currentState)
@@ -121,11 +133,7 @@ local function UpdateFade(elapsed)
 end
 
 local function UpdateVisualState()
-    if not enabled then
-        Transition("hidden")
-        return
-    end
-    if not UnitExists("target") or not UnitCanAttack("player", "target") or UnitIsDead("target") then
+    if not enabled or not hasValidTarget then
         Transition("hidden")
         return
     end
@@ -140,16 +148,17 @@ local function UpdateVisualState()
         newState = "in"
     end
 
-    D("UpdateVisualState: inMelee="..tostring(inMelee).." isBehind="..tostring(isBehind).." -> "..newState)
+    if DEBUG then D("UpdateVisualState: inMelee="..tostring(inMelee).." isBehind="..tostring(isBehind).." -> "..newState) end
     Transition(newState)
 end
 
 -- Poll position state using public UnitXP API
 local function PollPositionState()
-    -- Early exit if no valid target (cheap checks first)
-    if not UnitExists("target") then return end
-    if not UnitCanAttack("player", "target") then return end
-    if UnitIsDead("target") then return end
+    -- Target existence/attackability cached by events, only check death
+    if UnitIsDead("target") then
+        StopTracking()
+        return
+    end
 
     -- Check melee range using public API
     -- Returns 0 when in melee range, positive distance when out, nil on error
@@ -167,7 +176,7 @@ local function PollPositionState()
 
     -- Only update visual if state actually changed
     if newInMelee ~= inMelee or newIsBehind ~= isBehind then
-        D("State change: melee "..tostring(inMelee).."->"..tostring(newInMelee).." behind "..tostring(isBehind).."->"..tostring(newIsBehind))
+        if DEBUG then D("State change: melee "..tostring(inMelee).."->"..tostring(newInMelee).." behind "..tostring(isBehind).."->"..tostring(newIsBehind)) end
         inMelee = newInMelee
         isBehind = newIsBehind
         UpdateVisualState()
@@ -176,9 +185,10 @@ end
 
 -- Start tracking with Lua polling
 local function StartTracking()
-    D("StartTracking called")
+    if DEBUG then D("StartTracking called") end
     if not enabled then return end
     isTracking = true
+    hasValidTarget = true  -- Caller already validated target
     pollElapsed = pollInterval  -- Trigger immediate first poll
     inMelee = false
     isBehind = false
@@ -187,8 +197,9 @@ end
 
 -- Stop tracking
 local function StopTracking()
-    D("StopTracking called")
+    if DEBUG then D("StopTracking called") end
     isTracking = false
+    hasValidTarget = false
     inMelee = false
     isBehind = false
     Transition("hidden")
@@ -196,7 +207,7 @@ end
 
 -- Frame handlers
 function PositionIndicator_OnLoad()
-    D("OnLoad")
+    if DEBUG then D("OnLoad") end
     frame = this
     mainTex = PositionIndicatorTexture
     fadeTex = PositionIndicatorFadeTexture
@@ -251,6 +262,9 @@ function PositionIndicator_OnEvent()
 end
 
 function PositionIndicator_OnUpdate()
+    -- Early exit when completely idle (no tracking, no fading)
+    if not isTracking and not isFading then return end
+
     -- Throttled polling (only when tracking)
     if isTracking then
         pollElapsed = pollElapsed + arg1
@@ -260,8 +274,10 @@ function PositionIndicator_OnUpdate()
         end
     end
 
-    -- Fade animation (runs every frame)
-    UpdateFade(arg1)
+    -- Fade animation (only when fading)
+    if isFading then
+        UpdateFade(arg1)
+    end
 end
 
 function PositionIndicator_CanDrag()
@@ -275,13 +291,13 @@ function PositionIndicator_SavePosition()
 end
 
 function PositionIndicator_Slash(msg)
-    msg = string.lower(msg or "")
+    msg = strlower(msg or "")
 
     if msg == "" then
         enabled = not enabled
         PositionIndicatorDB.enabled = enabled
         DEFAULT_CHAT_FRAME:AddMessage("PositionIndicator "..(enabled and "ON" or "OFF"))
-        if enabled and UnitExists("target") and UnitCanAttack("player", "target") then
+        if enabled and UnitExists("target") and UnitCanAttack("player", "target") and not UnitIsDead("target") then
             StartTracking()
         else
             StopTracking()
@@ -305,8 +321,8 @@ function PositionIndicator_Slash(msg)
         PositionIndicatorDB.locked = false
         DEFAULT_CHAT_FRAME:AddMessage("Unlocked")
 
-    elseif string.find(msg, "^size ") then
-        local s = tonumber(string.sub(msg, 6))
+    elseif strfind(msg, "^size ") then
+        local s = tonumber(strsub(msg, 6))
         if s then
             if s < 32 then s = 32 end
             if s > 128 then s = 128 end
@@ -315,8 +331,8 @@ function PositionIndicator_Slash(msg)
             DEFAULT_CHAT_FRAME:AddMessage("Size: "..s)
         end
 
-    elseif string.find(msg, "^interval ") then
-        local n = tonumber(string.sub(msg, 10))
+    elseif strfind(msg, "^interval ") then
+        local n = tonumber(strsub(msg, 10))
         if n then
             if n < 0.05 then n = 0.05 end
             if n > 0.5 then n = 0.5 end
@@ -328,10 +344,10 @@ function PositionIndicator_Slash(msg)
         end
 
     elseif msg == "reset" then
-        PositionIndicatorDB = { enabled=true, locked=false, size=64, posX=0, posY=-150, pollInterval=0.1 }
+        PositionIndicatorDB = { enabled=true, locked=false, size=64, posX=0, posY=-150, pollInterval=0.2 }
         enabled = true
         locked = false
-        pollInterval = 0.1
+        pollInterval = 0.2
         SetSize()
         frame:ClearAllPoints()
         frame:SetPoint("CENTER", UIParent, "CENTER", 0, -150)
