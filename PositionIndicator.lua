@@ -22,7 +22,27 @@ local DEFAULT_POLL_INTERVAL = 0.2  -- 200ms
 
 local DEBUG = false
 
-local frame, mainTex, fadeTex
+-- Create frame and textures in Lua (no XML needed)
+local frame = CreateFrame("Frame", nil, UIParent)
+frame:SetFrameStrata("HIGH")
+frame:SetMovable(true)
+frame:SetWidth(DEFAULT_SIZE)
+frame:SetHeight(DEFAULT_SIZE)
+frame:SetPoint("CENTER", UIParent, "CENTER", 0, -150)
+frame:Hide()
+
+local fadeTex = frame:CreateTexture(nil, "BACKGROUND")
+fadeTex:SetWidth(DEFAULT_SIZE)
+fadeTex:SetHeight(DEFAULT_SIZE)
+fadeTex:SetPoint("CENTER", frame, "CENTER", 0, 0)
+fadeTex:Hide()
+
+local mainTex = frame:CreateTexture(nil, "ARTWORK")
+mainTex:SetWidth(DEFAULT_SIZE)
+mainTex:SetHeight(DEFAULT_SIZE)
+mainTex:SetPoint("CENTER", frame, "CENTER", 0, 0)
+
+-- State variables
 local enabled = true
 local locked = false
 local inMelee = false
@@ -152,6 +172,9 @@ local function UpdateVisualState()
     Transition(newState)
 end
 
+-- Forward declaration for StopTracking
+local StopTracking
+
 -- Poll position state using public UnitXP API
 local function PollPositionState()
     -- Target existence/attackability cached by events, only check death
@@ -196,7 +219,7 @@ local function StartTracking()
 end
 
 -- Stop tracking
-local function StopTracking()
+StopTracking = function()
     if DEBUG then D("StopTracking called") end
     isTracking = false
     hasValidTarget = false
@@ -205,92 +228,24 @@ local function StopTracking()
     Transition("hidden")
 end
 
--- Frame handlers
-function PositionIndicator_OnLoad()
-    if DEBUG then D("OnLoad") end
-    frame = this
-    mainTex = PositionIndicatorTexture
-    fadeTex = PositionIndicatorFadeTexture
-
-    this:RegisterForDrag("LeftButton")
-    this:RegisterEvent("VARIABLES_LOADED")
-    this:RegisterEvent("PLAYER_TARGET_CHANGED")
-    this:RegisterEvent("PLAYER_ENTERING_WORLD")
-    this:RegisterEvent("PLAYER_DEAD")
-    this:RegisterEvent("PLAYER_UNGHOST")
-end
-
-function PositionIndicator_OnEvent()
-    if event == "VARIABLES_LOADED" then
-        if not PositionIndicatorDB then PositionIndicatorDB = {} end
-        for k, v in pairs(defaults) do
-            if PositionIndicatorDB[k] == nil then PositionIndicatorDB[k] = v end
-        end
-        enabled = PositionIndicatorDB.enabled
-        locked = PositionIndicatorDB.locked
-        pollInterval = PositionIndicatorDB.pollInterval or DEFAULT_POLL_INTERVAL
-        SetSize()
-        frame:ClearAllPoints()
-        frame:SetPoint("CENTER", UIParent, "CENTER",
-            PositionIndicatorDB.posX or 0, PositionIndicatorDB.posY or -150)
-        SLASH_POSI1 = "/posi"
-        SlashCmdList["POSI"] = PositionIndicator_Slash
-        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00PositionIndicator|r loaded. /posi for help")
-
-    elseif event == "PLAYER_TARGET_CHANGED" then
-        if UnitExists("target") and UnitCanAttack("player", "target") and not UnitIsDead("target") then
-            StartTracking()
-        else
-            StopTracking()
-        end
-
-    elseif event == "PLAYER_ENTERING_WORLD" then
-        if enabled and UnitExists("target") and UnitCanAttack("player", "target") and not UnitIsDead("target") then
-            StartTracking()
-        else
-            StopTracking()
-        end
-
-    elseif event == "PLAYER_DEAD" then
-        StopTracking()
-
-    elseif event == "PLAYER_UNGHOST" then
-        if enabled and UnitExists("target") and UnitCanAttack("player", "target") and not UnitIsDead("target") then
-            StartTracking()
-        end
+local function SavePosition()
+    local x, y
+    -- Get frame center position relative to screen center
+    local frameX, frameY = frame:GetCenter()
+    local screenX, screenY = UIParent:GetCenter()
+    if frameX and screenX then
+        x = frameX - screenX
+        y = frameY - screenY
+    else
+        x = 0
+        y = -150
     end
-end
-
-function PositionIndicator_OnUpdate()
-    -- Early exit when completely idle (no tracking, no fading)
-    if not isTracking and not isFading then return end
-
-    -- Throttled polling (only when tracking)
-    if isTracking then
-        pollElapsed = pollElapsed + arg1
-        if pollElapsed >= pollInterval then
-            pollElapsed = 0
-            PollPositionState()
-        end
-    end
-
-    -- Fade animation (only when fading)
-    if isFading then
-        UpdateFade(arg1)
-    end
-end
-
-function PositionIndicator_CanDrag()
-    return not locked
-end
-
-function PositionIndicator_SavePosition()
-    local _, _, _, x, y = frame:GetPoint()
+    if DEBUG then D("Saving center-relative pos: "..tostring(x)..", "..tostring(y)) end
     PositionIndicatorDB.posX = x
     PositionIndicatorDB.posY = y
 end
 
-function PositionIndicator_Slash(msg)
+local function SlashHandler(msg)
     msg = strlower(msg or "")
 
     if msg == "" then
@@ -314,11 +269,13 @@ function PositionIndicator_Slash(msg)
     elseif msg == "lock" then
         locked = true
         PositionIndicatorDB.locked = true
+        frame:EnableMouse(false)
         DEFAULT_CHAT_FRAME:AddMessage("Locked")
 
     elseif msg == "unlock" then
         locked = false
         PositionIndicatorDB.locked = false
+        frame:EnableMouse(true)
         DEFAULT_CHAT_FRAME:AddMessage("Unlocked")
 
     elseif strfind(msg, "^size ") then
@@ -348,6 +305,7 @@ function PositionIndicator_Slash(msg)
         enabled = true
         locked = false
         pollInterval = 0.2
+        frame:EnableMouse(true)
         SetSize()
         frame:ClearAllPoints()
         frame:SetPoint("CENTER", UIParent, "CENTER", 0, -150)
@@ -363,3 +321,87 @@ function PositionIndicator_Slash(msg)
         DEFAULT_CHAT_FRAME:AddMessage("/posi reset - reset to defaults")
     end
 end
+
+-- Event handler
+local function OnEvent()
+    if event == "VARIABLES_LOADED" then
+        if not PositionIndicatorDB then PositionIndicatorDB = {} end
+        for k, v in pairs(defaults) do
+            if PositionIndicatorDB[k] == nil then PositionIndicatorDB[k] = v end
+        end
+        enabled = PositionIndicatorDB.enabled
+        locked = PositionIndicatorDB.locked
+        pollInterval = PositionIndicatorDB.pollInterval or DEFAULT_POLL_INTERVAL
+        frame:EnableMouse(not locked)
+        SetSize()
+        frame:ClearAllPoints()
+        frame:SetPoint("CENTER", UIParent, "CENTER",
+            PositionIndicatorDB.posX or 0, PositionIndicatorDB.posY or -150)
+        SLASH_POSI1 = "/posi"
+        SlashCmdList["POSI"] = SlashHandler
+        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00PositionIndicator|r loaded. /posi for help")
+
+    elseif event == "PLAYER_TARGET_CHANGED" then
+        if UnitExists("target") and UnitCanAttack("player", "target") and not UnitIsDead("target") then
+            StartTracking()
+        else
+            StopTracking()
+        end
+
+    elseif event == "PLAYER_ENTERING_WORLD" then
+        if enabled and UnitExists("target") and UnitCanAttack("player", "target") and not UnitIsDead("target") then
+            StartTracking()
+        else
+            StopTracking()
+        end
+
+    elseif event == "PLAYER_DEAD" then
+        StopTracking()
+
+    elseif event == "PLAYER_UNGHOST" then
+        if enabled and UnitExists("target") and UnitCanAttack("player", "target") and not UnitIsDead("target") then
+            StartTracking()
+        end
+    end
+end
+
+-- OnUpdate handler
+local function OnUpdate()
+    -- Early exit when completely idle (no tracking, no fading)
+    if not isTracking and not isFading then return end
+
+    -- Throttled polling (only when tracking)
+    if isTracking then
+        pollElapsed = pollElapsed + arg1
+        if pollElapsed >= pollInterval then
+            pollElapsed = 0
+            PollPositionState()
+        end
+    end
+
+    -- Fade animation (only when fading)
+    if isFading then
+        UpdateFade(arg1)
+    end
+end
+
+-- Set up frame scripts
+frame:SetScript("OnEvent", OnEvent)
+frame:SetScript("OnUpdate", OnUpdate)
+frame:SetScript("OnDragStart", function()
+    if not locked then this:StartMoving() end
+end)
+frame:SetScript("OnDragStop", function()
+    this:StopMovingOrSizing()
+    if not locked then
+        SavePosition()
+    end
+end)
+
+-- Register events and enable dragging (replaces OnLoad)
+frame:RegisterForDrag("LeftButton")
+frame:RegisterEvent("VARIABLES_LOADED")
+frame:RegisterEvent("PLAYER_TARGET_CHANGED")
+frame:RegisterEvent("PLAYER_ENTERING_WORLD")
+frame:RegisterEvent("PLAYER_DEAD")
+frame:RegisterEvent("PLAYER_UNGHOST")

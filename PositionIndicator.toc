@@ -6,4 +6,3 @@
 ## SavedVariables: PositionIndicatorDB
 
 PositionIndicator.lua
-PositionIndicator.xml
